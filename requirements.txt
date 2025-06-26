@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+PyMuPDF
+faiss-cpu
+sentence-transformers
+langdetect
+transformers
+torch
+python-multipart
