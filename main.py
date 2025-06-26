@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-import fitz
+import fitz  # PyMuPDF
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
@@ -8,8 +8,10 @@ from langdetect import detect
 import requests
 import os
 
+# Initialisation FastAPI
 app = FastAPI()
 
+# CORS pour le frontend (accès depuis n’importe quel domaine)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,27 +20,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------- Embedding model (léger et rapide) ----------- #
+# Chargement du modèle d’embedding léger
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ----------- API HuggingFace ----------- #
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
-HUGGINGFACE_API_TOKEN = os.getenv("HF_TOKEN") 
+# Appel API HuggingFace (token à configurer dans Render > Environment)
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
-def call_llm(prompt):
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
+def call_llm(prompt: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
     payload = {
         "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 300,
-            "temperature": 0.7
-        }
+        "parameters": {"max_new_tokens": 300}
     }
-    response = requests.post(HUGGINGFACE_API_URL, headers=headers, json=payload)
-    response.raise_for_status()
-    return response.json()[0]["generated_text"]
+    response = requests.post(
+        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+        headers=headers,
+        json=payload
+    )
+    if response.status_code == 200:
+        result = response.json()
+        return result[0]["generated_text"].split("Réponse:")[-1].strip()
+    else:
+        return "Erreur LLM : " + response.text
 
-# ----------- Text utils ----------- #
 def clean_text(text):
     return ' '.join([line.strip() for line in text.split('\n') if len(line.strip()) > 5])
 
@@ -55,7 +62,6 @@ def segment_text(text, max_chars=500):
         chunks.append(chunk.strip())
     return chunks
 
-# ----------- Route principale ----------- #
 @app.post("/query/")
 async def query(pdf: UploadFile = File(...), question: str = Form(...)):
     doc = fitz.open(stream=await pdf.read(), filetype="pdf")
@@ -84,7 +90,7 @@ async def query(pdf: UploadFile = File(...), question: str = Form(...)):
 
     context_text = "\n\n".join([c["chunk"] for c in context_chunks])
     prompt = f"Contexte:\n{context_text}\n\nQuestion: {question}\nRéponse:"
-    answer = call_llm(prompt).split("Réponse:")[-1].strip()
+    answer = call_llm(prompt)
 
     return {
         "answer": answer,
