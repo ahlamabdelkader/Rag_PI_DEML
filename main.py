@@ -8,10 +8,10 @@ from langdetect import detect
 import requests
 import os
 
-# Initialisation FastAPI
+# Initialisation de l'app FastAPI
 app = FastAPI()
 
-# CORS pour le frontend (accès depuis n’importe quel domaine)
+# Middleware CORS pour accepter les requêtes cross-origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,20 +20,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Chargement du modèle d’embedding léger
+# Chargement du modèle d'embedding
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Appel API HuggingFace (token à configurer dans Render > Environment)
+# Récupération du token Hugging Face
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
 def call_llm(prompt: str) -> str:
+    """Appelle l'API Hugging Face pour générer une réponse"""
     headers = {
         "Authorization": f"Bearer {HF_API_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
         "inputs": prompt,
-        "parameters": {"max_new_tokens": 300}
+        "parameters": {
+            "max_new_tokens": 300
+        }
     }
     response = requests.post(
         "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
@@ -44,7 +47,7 @@ def call_llm(prompt: str) -> str:
         result = response.json()
         return result[0]["generated_text"].split("Réponse:")[-1].strip()
     else:
-        return "Erreur LLM : " + response.text
+        return "Erreur API Hugging Face: " + response.text
 
 def clean_text(text):
     return ' '.join([line.strip() for line in text.split('\n') if len(line.strip()) > 5])
@@ -64,10 +67,12 @@ def segment_text(text, max_chars=500):
 
 @app.post("/query/")
 async def query(pdf: UploadFile = File(...), question: str = Form(...)):
+    # Lecture du PDF
     doc = fitz.open(stream=await pdf.read(), filetype="pdf")
     full_text = "\n".join([page.get_text() for page in doc])
     lang = detect(full_text)
 
+    # Segmentation en chunks
     chunks = []
     for page_num, page in enumerate(doc, 1):
         page_text = page.get_text()
@@ -77,17 +82,20 @@ async def query(pdf: UploadFile = File(...), question: str = Form(...)):
             if len(cleaned.split()) >= 5:
                 chunks.append({"chunk": cleaned, "page": page_num})
 
+    # Embedding des chunks
     texts = [c["chunk"] for c in chunks]
     emb = embedding_model.encode(texts)
     emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
     index = faiss.IndexFlatIP(emb.shape[1])
     index.add(emb)
 
+    # Embedding de la question et recherche
     q_vec = embedding_model.encode([question])
     q_vec = q_vec / np.linalg.norm(q_vec, axis=1, keepdims=True)
     _, I = index.search(q_vec, 3)
     context_chunks = [chunks[i] for i in I[0]]
 
+    # Construction du prompt et appel LLM
     context_text = "\n\n".join([c["chunk"] for c in context_chunks])
     prompt = f"Contexte:\n{context_text}\n\nQuestion: {question}\nRéponse:"
     answer = call_llm(prompt)
