@@ -4,6 +4,5 @@ PyMuPDF
 faiss-cpu
 sentence-transformers
 langdetect
-transformers
-torch
+requests
 python-multipart
