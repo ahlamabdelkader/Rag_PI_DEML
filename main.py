@@ -5,8 +5,8 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 from langdetect import detect
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
+import requests
+import os
 
 app = FastAPI()
 
@@ -18,15 +18,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------- Embedding model (léger et rapide) ----------- #
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
-llm_model = AutoModelForCausalLM.from_pretrained(
-    "mistralai/Mistral-7B-Instruct-v0.2",
-    device_map="auto",
-    torch_dtype=torch.float16
-)
+# ----------- API HuggingFace ----------- #
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-base"
+HUGGINGFACE_API_TOKEN = os.getenv("HF_TOKEN") 
 
+def call_llm(prompt):
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 300,
+            "temperature": 0.7
+        }
+    }
+    response = requests.post(HUGGINGFACE_API_URL, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()[0]["generated_text"]
+
+# ----------- Text utils ----------- #
 def clean_text(text):
     return ' '.join([line.strip() for line in text.split('\n') if len(line.strip()) > 5])
 
@@ -43,6 +55,7 @@ def segment_text(text, max_chars=500):
         chunks.append(chunk.strip())
     return chunks
 
+# ----------- Route principale ----------- #
 @app.post("/query/")
 async def query(pdf: UploadFile = File(...), question: str = Form(...)):
     doc = fitz.open(stream=await pdf.read(), filetype="pdf")
@@ -71,9 +84,7 @@ async def query(pdf: UploadFile = File(...), question: str = Form(...)):
 
     context_text = "\n\n".join([c["chunk"] for c in context_chunks])
     prompt = f"Contexte:\n{context_text}\n\nQuestion: {question}\nRéponse:"
-    inputs = tokenizer(prompt, return_tensors="pt").to(llm_model.device)
-    output = llm_model.generate(**inputs, max_length=512, do_sample=True)
-    answer = tokenizer.decode(output[0], skip_special_tokens=True).split("Réponse:")[-1].strip()
+    answer = call_llm(prompt).split("Réponse:")[-1].strip()
 
     return {
         "answer": answer,
