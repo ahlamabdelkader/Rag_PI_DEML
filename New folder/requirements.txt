@@ -1,0 +1,8 @@
+Django>=3.2,<5
+djangorestframework
+pymongo
+gunicorn
+dj-database-url
+django-cors-headers
+gunicorn
+
